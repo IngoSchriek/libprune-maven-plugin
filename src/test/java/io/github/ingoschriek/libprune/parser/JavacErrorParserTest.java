@@ -22,9 +22,10 @@ class JavacErrorParserTest {
                 + "  symbol:   class MyService\n"
                 + "  location: class com.example.Foo\n";
 
-        Set<MissingSymbol> result = parser.parse(output);
+        ParseResult result = parser.parse(output);
 
-        assertTrue(result.contains(new MissingSymbol("MyService", MissingSymbol.Kind.CLASS)));
+        assertTrue(result.getProduction().contains(
+                new MissingSymbol("MyService", MissingSymbol.Kind.CLASS)));
     }
 
     @Test
@@ -33,9 +34,9 @@ class JavacErrorParserTest {
                 + "  symbol:   variable HawaDefaultDigestProvider\n"
                 + "  location: class com.example.Foo\n";
 
-        Set<MissingSymbol> result = parser.parse(output);
+        ParseResult result = parser.parse(output);
 
-        assertTrue(result.contains(
+        assertTrue(result.getProduction().contains(
                 new MissingSymbol("HawaDefaultDigestProvider", MissingSymbol.Kind.CLASS)));
     }
 
@@ -43,9 +44,10 @@ class JavacErrorParserTest {
     void ignoresLowercaseVariables() {
         String output = "  symbol:   variable someLocalVar\n";
 
-        Set<MissingSymbol> result = parser.parse(output);
+        ParseResult result = parser.parse(output);
 
-        assertTrue(result.isEmpty());
+        assertTrue(result.getProduction().isEmpty());
+        assertTrue(result.getTestOnly().isEmpty());
     }
 
     @Test
@@ -53,9 +55,9 @@ class JavacErrorParserTest {
         String output = "[ERROR] /path/Foo.java:[12,54] "
                 + "package br.ufsc.labsec.valueobject.crypto.cmc.controls does not exist\n";
 
-        Set<MissingSymbol> result = parser.parse(output);
+        ParseResult result = parser.parse(output);
 
-        assertTrue(result.contains(new MissingSymbol(
+        assertTrue(result.getProduction().contains(new MissingSymbol(
                 "br.ufsc.labsec.valueobject.crypto.cmc.controls", MissingSymbol.Kind.PACKAGE)));
     }
 
@@ -67,13 +69,16 @@ class JavacErrorParserTest {
                 + "package com.example.util does not exist\n"
                 + "  symbol:   variable localThing\n";
 
-        Set<MissingSymbol> result = parser.parse(output);
+        ParseResult result = parser.parse(output);
 
-        assertEquals(4, result.size());
-        assertTrue(result.contains(new MissingSymbol("Alpha", MissingSymbol.Kind.CLASS)));
-        assertTrue(result.contains(new MissingSymbol("Beta", MissingSymbol.Kind.CLASS)));
-        assertTrue(result.contains(new MissingSymbol("Gamma", MissingSymbol.Kind.CLASS)));
-        assertTrue(result.contains(
+        assertEquals(4, result.getProduction().size());
+        assertTrue(result.getProduction().contains(
+                new MissingSymbol("Alpha", MissingSymbol.Kind.CLASS)));
+        assertTrue(result.getProduction().contains(
+                new MissingSymbol("Beta", MissingSymbol.Kind.CLASS)));
+        assertTrue(result.getProduction().contains(
+                new MissingSymbol("Gamma", MissingSymbol.Kind.CLASS)));
+        assertTrue(result.getProduction().contains(
                 new MissingSymbol("com.example.util", MissingSymbol.Kind.PACKAGE)));
     }
 
@@ -81,9 +86,10 @@ class JavacErrorParserTest {
     void returnsEmptyForCleanOutput() {
         String output = "[INFO] BUILD SUCCESS\n[INFO] Total time: 2.5s\n";
 
-        Set<MissingSymbol> result = parser.parse(output);
+        ParseResult result = parser.parse(output);
 
-        assertTrue(result.isEmpty());
+        assertTrue(result.getProduction().isEmpty());
+        assertTrue(result.getTestOnly().isEmpty());
     }
 
     @Test
@@ -92,27 +98,112 @@ class JavacErrorParserTest {
                 + "  symbol:   class Foo\n"
                 + "  symbol:   class Foo\n";
 
-        Set<MissingSymbol> result = parser.parse(output);
+        ParseResult result = parser.parse(output);
 
-        assertEquals(1, result.size());
+        assertEquals(1, result.getProduction().size());
     }
 
     @Test
     void parsesMethodSymbol() {
         String output = "  symbol:   method doSomething\n";
 
-        Set<MissingSymbol> result = parser.parse(output);
+        ParseResult result = parser.parse(output);
 
-        // lowercase method name is ignored
-        assertTrue(result.isEmpty());
+        assertTrue(result.getProduction().isEmpty());
     }
 
     @Test
     void parsesStaticSymbol() {
         String output = "  symbol:   static MyConstant\n";
 
-        Set<MissingSymbol> result = parser.parse(output);
+        ParseResult result = parser.parse(output);
 
-        assertTrue(result.contains(new MissingSymbol("MyConstant", MissingSymbol.Kind.CLASS)));
+        assertTrue(result.getProduction().contains(
+                new MissingSymbol("MyConstant", MissingSymbol.Kind.CLASS)));
+    }
+
+    @Test
+    void classifiesTestFileErrorsAsTestOnly() {
+        String output = "[ERROR] /project/src/test/java/com/example/FooTest.java:[5,1] "
+                + "cannot find symbol\n"
+                + "  symbol:   class DeletedHelper\n";
+
+        ParseResult result = parser.parse(output);
+
+        assertTrue(result.getProduction().isEmpty());
+        assertTrue(result.getTestOnly().contains(
+                new MissingSymbol("DeletedHelper", MissingSymbol.Kind.CLASS)));
+    }
+
+    @Test
+    void classifiesProductionFileErrorsAsProduction() {
+        String output = "[ERROR] /project/src/main/java/com/example/Foo.java:[10,1] "
+                + "cannot find symbol\n"
+                + "  symbol:   class Bar\n";
+
+        ParseResult result = parser.parse(output);
+
+        assertTrue(result.getProduction().contains(
+                new MissingSymbol("Bar", MissingSymbol.Kind.CLASS)));
+        assertTrue(result.getTestOnly().isEmpty());
+    }
+
+    @Test
+    void symbolNeededByBothProductionAndTestIsProduction() {
+        String output = "[ERROR] /project/src/test/java/com/example/FooTest.java:[5,1] "
+                + "cannot find symbol\n"
+                + "  symbol:   class Shared\n"
+                + "[ERROR] /project/src/main/java/com/example/Foo.java:[10,1] "
+                + "cannot find symbol\n"
+                + "  symbol:   class Shared\n";
+
+        ParseResult result = parser.parse(output);
+
+        assertTrue(result.getProduction().contains(
+                new MissingSymbol("Shared", MissingSymbol.Kind.CLASS)));
+        assertFalse(result.getTestOnly().contains(
+                new MissingSymbol("Shared", MissingSymbol.Kind.CLASS)));
+    }
+
+    @Test
+    void mixedProductionAndTestOnlySymbols() {
+        String output = "[ERROR] /project/src/main/java/com/example/App.java:[8,1] "
+                + "cannot find symbol\n"
+                + "  symbol:   class ProdDep\n"
+                + "[ERROR] /project/src/test/java/com/example/AppTest.java:[12,1] "
+                + "cannot find symbol\n"
+                + "  symbol:   class TestHelper\n";
+
+        ParseResult result = parser.parse(output);
+
+        assertEquals(1, result.getProduction().size());
+        assertTrue(result.getProduction().contains(
+                new MissingSymbol("ProdDep", MissingSymbol.Kind.CLASS)));
+        assertEquals(1, result.getTestOnly().size());
+        assertTrue(result.getTestOnly().contains(
+                new MissingSymbol("TestHelper", MissingSymbol.Kind.CLASS)));
+    }
+
+    @Test
+    void testPackageDoesNotExistClassifiedBySourceFile() {
+        String output = "[ERROR] /project/src/test/java/com/example/FooTest.java:[3,1] "
+                + "package com.example.internal does not exist\n";
+
+        ParseResult result = parser.parse(output);
+
+        assertTrue(result.getProduction().isEmpty());
+        assertTrue(result.getTestOnly().contains(
+                new MissingSymbol("com.example.internal", MissingSymbol.Kind.PACKAGE)));
+    }
+
+    @Test
+    void noFileContextDefaultsToProduction() {
+        String output = "  symbol:   class OrphanSymbol\n";
+
+        ParseResult result = parser.parse(output);
+
+        assertTrue(result.getProduction().contains(
+                new MissingSymbol("OrphanSymbol", MissingSymbol.Kind.CLASS)));
+        assertTrue(result.getTestOnly().isEmpty());
     }
 }

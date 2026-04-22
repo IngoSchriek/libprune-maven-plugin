@@ -6,6 +6,7 @@ import io.github.ingoschriek.libprune.git.GitRestorer;
 import io.github.ingoschriek.libprune.parser.ErrorParser;
 import io.github.ingoschriek.libprune.parser.JavacErrorParser;
 import io.github.ingoschriek.libprune.parser.MissingSymbol;
+import io.github.ingoschriek.libprune.parser.ParseResult;
 
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
@@ -87,13 +88,31 @@ public class RecoverMojo extends AbstractMojo {
                 return;
             }
 
-            Set<MissingSymbol> missing = parser.parse(result.getOutput());
-            if (missing.isEmpty()) {
+            ParseResult parseResult = parser.parse(result.getOutput());
+            Set<MissingSymbol> missing = parseResult.getProduction();
+            Set<MissingSymbol> testOnly = parseResult.getTestOnly();
+
+            if (!testOnly.isEmpty()) {
+                getLog().info("Symbols only needed by test code (skipped):");
+                for (MissingSymbol s : testOnly) {
+                    getLog().info("  ~ " + s);
+                }
+            }
+
+            if (missing.isEmpty() && testOnly.isEmpty()) {
                 getLog().error("Compilation failed but no recognizable missing symbols found.");
                 getLog().error("Last 20 lines of output:");
                 printTail(result.getOutput(), 20);
                 throw new MojoFailureException(
                         "Compilation failed with unrecognizable errors. Check output above.");
+            }
+
+            if (missing.isEmpty()) {
+                getLog().info("");
+                getLog().info("All remaining missing symbols are only needed by test code.");
+                getLog().info("Remove or update the affected tests to complete the cleanup.");
+                printSummary(restored, totalDeleted);
+                return;
             }
 
             Map<String, String> toRestore = resolveFilesToRestore(missing, git);
@@ -107,9 +126,9 @@ public class RecoverMojo extends AbstractMojo {
             }
 
             getLog().info("Files to restore this iteration: " + toRestore.size());
-            TreeSet<String> sortedNames = new TreeSet<>(toRestore.keySet());
-            for (String className : sortedNames) {
-                String path = toRestore.get(className);
+            TreeSet<String> sortedPaths = new TreeSet<>(toRestore.keySet());
+            for (String path : sortedPaths) {
+                String className = toRestore.get(path);
                 boolean ok = git.restore(path);
                 if (ok) {
                     restored.add(className);
@@ -129,17 +148,12 @@ public class RecoverMojo extends AbstractMojo {
 
         for (MissingSymbol symbol : missing) {
             if (symbol.getKind() == MissingSymbol.Kind.CLASS) {
-                String path = git.findByClassName(symbol.getName());
-                if (path != null) {
-                    toRestore.put(symbol.getName(), path);
+                for (String path : git.findByClassName(symbol.getName())) {
+                    toRestore.put(path, symbol.getName());
                 }
             } else if (symbol.getKind() == MissingSymbol.Kind.PACKAGE) {
-                List<String> paths = git.findByPackage(symbol.getName());
-                for (String path : paths) {
-                    String className = git.classNameFromPath(path);
-                    if (git.findByClassName(className) != null) {
-                        toRestore.put(className, path);
-                    }
+                for (String path : git.findByPackage(symbol.getName())) {
+                    toRestore.put(path, git.classNameFromPath(path));
                 }
             }
         }

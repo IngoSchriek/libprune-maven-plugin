@@ -1,17 +1,15 @@
 package io.github.ingoschriek.libprune.parser;
 
-import java.util.Set;
-
 /**
  * Parses compiler output to extract missing symbols.
  */
 public interface ErrorParser {
 
     /**
-     * Parse compiler output and return the set of missing symbols.
+     * Parse compiler output and classify missing symbols as production or test-only.
      *
      * @param compilerOutput the full stdout+stderr from the build tool
-     * @return set of missing symbols (classes and packages)
+     * @return parse result with production and test-only symbol sets
      */
-    Set<MissingSymbol> parse(String compilerOutput);
+    ParseResult parse(String compilerOutput);
 }

@@ -20,12 +20,12 @@ import java.util.regex.Pattern;
 public final class GitRestorer {
 
     private static final Pattern JAVA_PACKAGE_PATTERN =
-            Pattern.compile("src/main/java/(.+)/[^/]+\\.java$");
+            Pattern.compile("src/(?:main|test)/[^/]+/(.+)/[^/]+\\.java$");
 
     private final File projectDir;
 
-    /** class name -> relative path */
-    private final Map<String, String> deletedByClass;
+    /** class name -> relative paths (multiple in multi-module projects) */
+    private final Map<String, List<String>> deletedByClass;
 
     /** java package -> list of relative paths */
     private final Map<String, List<String>> deletedByPackage;
@@ -38,7 +38,8 @@ public final class GitRestorer {
     }
 
     private void loadDeletedFiles() throws IOException {
-        ProcessBuilder pb = new ProcessBuilder("git", "diff", "--name-only", "--diff-filter=D")
+        ProcessBuilder pb = new ProcessBuilder(
+                "git", "diff", "HEAD", "--name-only", "--diff-filter=D")
                 .directory(projectDir)
                 .redirectErrorStream(true);
 
@@ -51,7 +52,7 @@ public final class GitRestorer {
                 if (!line.endsWith(".java")) continue;
 
                 String className = Path.of(line).getFileName().toString().replace(".java", "");
-                deletedByClass.put(className, line);
+                deletedByClass.computeIfAbsent(className, k -> new ArrayList<>()).add(line);
 
                 Matcher m = JAVA_PACKAGE_PATTERN.matcher(line);
                 if (m.find()) {
@@ -66,7 +67,7 @@ public final class GitRestorer {
      * @return number of deleted files available for restoration.
      */
     public int getDeletedCount() {
-        return deletedByClass.size();
+        return deletedByClass.values().stream().mapToInt(List::size).sum();
     }
 
     /**
@@ -77,12 +78,12 @@ public final class GitRestorer {
     }
 
     /**
-     * Find the relative path of a deleted class by its simple name.
+     * Find all deleted file paths matching a simple class name.
      *
-     * @return the path, or null if not found
+     * @return list of relative paths, or empty list if none
      */
-    public String findByClassName(String className) {
-        return deletedByClass.get(className);
+    public List<String> findByClassName(String className) {
+        return deletedByClass.getOrDefault(className, Collections.emptyList());
     }
 
     /**
@@ -109,7 +110,8 @@ public final class GitRestorer {
      * @return true if the restore command succeeded
      */
     public boolean restore(String relativePath) throws IOException, InterruptedException {
-        ProcessBuilder pb = new ProcessBuilder("git", "restore", relativePath)
+        ProcessBuilder pb = new ProcessBuilder(
+                "git", "checkout", "HEAD", "--", relativePath)
                 .directory(projectDir)
                 .redirectErrorStream(true);
 
@@ -118,7 +120,17 @@ public final class GitRestorer {
 
         if (exitCode == 0) {
             String className = classNameFromPath(relativePath);
-            deletedByClass.remove(className);
+            List<String> paths = deletedByClass.get(className);
+            if (paths != null) {
+                paths.remove(relativePath);
+                if (paths.isEmpty()) {
+                    deletedByClass.remove(className);
+                }
+            }
+            for (List<String> pkgPaths : deletedByPackage.values()) {
+                pkgPaths.remove(relativePath);
+            }
+            deletedByPackage.values().removeIf(List::isEmpty);
         }
 
         return exitCode == 0;
